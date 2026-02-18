@@ -1,4 +1,6 @@
-print("### RUNNING NEW MAIN (MULTI LD PARALLEL) ###")
+print("### RUNNING Stive88 ###")
+APP_NAME = "MULTI LD AUTOMATION TOOL By Stive88"
+APP_VERSION = "2.0"   # เปลี่ยนเลขเองได้
 
 import uiautomator2 as u2
 import time
@@ -9,11 +11,12 @@ import sys
 import threading
 import msvcrt
 import os
+import socket
 import __main__
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import API_KEY, BASE_URL, SERVICE_CODE
 from rich.progress import Progress, SpinnerColumn, TextColumn
-
+from rich.prompt import Prompt
 # ====== Rich UI ======
 from rich.console import Console
 from rich.panel import Panel
@@ -24,6 +27,8 @@ from rich.live import Live
 
 console = Console()
 
+MAIN_MACHINE = "LAPTOP-2TP250RP"   # ← เปลี่ยนเป็นชื่อเครื่องหลักของคุณ
+
 # ====== ตั้งค่า path adb ของ LDPlayer ======
 ADB_PATH = r"C:\LDPlayer\LDPlayer9\adb.exe"   # แก้ให้ตรงเครื่องคุณ
 
@@ -31,10 +36,49 @@ GLOBAL_TIMEOUT = 40
 RETRY_INTERVAL = 0.5
 CANCEL_EVENT = threading.Event()
 
+import os, sys
+os.system("chcp 65001 >nul")  # ✅ UTF-8 ใน cmd/terminal
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdin.reconfigure(encoding="utf-8")
+except:
+    pass
+
+
 # ---------- REAL-TIME STATUS ----------
 STATUS_LOCK = threading.Lock()
 DEVICE_STATUS = {}  # serial -> {"state": str, "detail": str, "last": float}
 
+# ---------- ฟังก์ชันอัพเดต ----------
+
+def update_and_restart():
+    clear_screen()
+    console.print("[bold cyan]🔄 Updating from GitHub...[/bold cyan]\n")
+
+    try:
+        # ดึงอัปเดต
+        r = subprocess.run(["git", "pull"], capture_output=True, text=True)
+        out = (r.stdout or "") + "\n" + (r.stderr or "")
+        console.print(out.strip() if out.strip() else "(no output)")
+
+        if r.returncode != 0:
+            console.print("\n[bold red]❌ Update failed[/bold red]")
+            input("\nกด Enter เพื่อกลับ...")
+            return
+
+        # ถ้าไม่มีอะไรอัปเดต ก็ไม่ต้องรีสตาร์ท
+        if "Already up to date" in out or "Already up-to-date" in out:
+            console.print("\n[bold green]✅ Already up to date[/bold green]")
+            input("\nกด Enter เพื่อกลับ...")
+            return
+
+        console.print("\n[bold yellow]✅ Updated! Restarting...[/bold yellow]")
+        time.sleep(0.8)
+        fancy_restart()
+
+    except Exception as e:
+        console.print(f"\n[bold red]❌ Update error:[/bold red] {e}")
+        input("\nกด Enter เพื่อกลับ...")
 
 # ---------- ฟังก์ชันรีสตาร์ท ----------
 def fancy_restart():
@@ -80,6 +124,7 @@ def fancy_restart():
     os.execl(sys.executable, sys.executable, *sys.argv)
 
 def clear_screen():
+    os.system("mode con: cols=110 lines=35")
     os.system("cls")
 
 def set_status(serial, state, detail=""):
@@ -122,10 +167,16 @@ def build_status_table():
 
 
 def status_ui_loop(stop_event):
-    with Live(build_status_table(), refresh_per_second=2, console=console) as live:
+    with Live(
+        build_status_table(),
+        refresh_per_second=2,
+        console=console,
+        transient=True  # ✅ ปิดแล้วลบตาราง ไม่ทับ input
+    ) as live:
         while not stop_event.is_set():
             live.update(build_status_table())
             time.sleep(0.5)
+
 
 # ---------- LOG ----------
 def log(msg):
@@ -145,8 +196,9 @@ def show_banner(title, subtitle):
     text.append(ascii_logo, style="bold cyan")
     text.append(f"\n{title}\n", style="bold green")
     text.append(f"{subtitle}\n", style="yellow")
+    text.append(f"Version: {get_git_version()}\n", style="bright_cyan")
     text.append("\nDeveloped with ❤️  by Stive88", style="bold magenta")
-    console.print(Panel(Align.center(text), border_style="cyan", padding=(1,4)))
+    console.print(Panel(text, border_style="cyan", padding=(1,4)))
 
 # ---------- Utils ----------
 def get_devices():
@@ -163,6 +215,22 @@ def get_devices():
             serial = line.split()[0]
             devices.append(serial)
     return devices
+    
+def get_git_version():
+    try:
+        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+        commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        return f"{APP_VERSION} | {branch} | {commit}"
+    except:
+        return f"{APP_VERSION} | no-git"
+
+def is_main_machine():
+    try:
+        return socket.gethostname().upper() == MAIN_MACHINE.upper()
+    except:
+        return False
+
+
 
 def open_app(serial, pkg, act):
     cmd = [ADB_PATH, "-s", serial, "shell", "am", "start", "-W", "-n", f"{pkg}/{act}"]
@@ -1152,7 +1220,6 @@ def run_on_device(serial, mode):
         set_status(serial, "START", "Back + Reopen LINE")
         flow_back_and_reopen_line(d, serial)
 
-    
      # ---------- CANCEL_EVENT ----------
         
 def cancel_listener():
@@ -1169,6 +1236,41 @@ def cancel_listener():
 def clear_all_status():
     global DEVICE_STATUS   # ชื่อ dict/list ที่คุณใช้เก็บสถานะ
     DEVICE_STATUS.clear()
+    
+    
+def read_menu_enter(valid=set("123456789q")):
+    """
+    รับค่าแบบพิมพ์แล้วกด Enter (ไม่ลอย) ด้วย msvcrt
+    รองรับ Backspace
+    """
+    buf = []
+    while True:
+        ch = msvcrt.getwch()  # ได้เป็น str
+
+        # Enter
+        if ch in ("\r", "\n"):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            s = "".join(buf).strip().lower()
+            return s
+
+        # Backspace
+        if ch == "\b":
+            if buf:
+                buf.pop()
+                # ลบตัวล่าสุดบนจอ
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
+            continue
+
+        # รับเฉพาะตัวที่อนุญาต
+        c = ch.lower()
+        if c in valid and len(buf) == 0:
+            buf.append(c)
+            sys.stdout.write(c)
+            sys.stdout.flush()
+        # ถ้าคุณอยากให้พิมพ์ได้หลายตัว (เช่น 10) ค่อยขยายทีหลัง
+
 
 
 
@@ -1178,18 +1280,41 @@ def show_menu():
         "MULTI LD AUTOMATION TOOL",
         "Auto Register LINE | Delete Contacts | Delete LINE Friends"
     )
+
     console.print("\n[bold cyan]" + "="*60 + "[/bold cyan]")
-    console.print("[bold green]1) 🤖 สมัคร LINE อัตโนมัติ (🟢 ใช้งานได้ 🟢)[/bold green]")
-    console.print("[bold blue]2) 🗑️ ลบรายชื่อผู้ติดต่อทั้งหมด (🟢 ใช้งานได้ 🟢)[/bold blue]")
-    console.print("[bold white]3) 👥 ลบเพื่อนใน LINE ทั้งหมด (🟢 ใช้งานได้ 🟢)[/bold white]")
-    console.print("[bold cyan]4) ⚙️ ตั้งค่ารูปโปรไฟล์ (🟢 ใช้งานได้ 🟢)[/bold cyan]")
-    console.print("[bold yellow]5) ➕ เช๊คไอดีไลน์ (🟢 ใช้งานได้ 🟢)[/bold yellow]")
-    console.print("[bold red]6) 🔄 รีสตาร์ทโปรแกรมเพื่ออัพเดตโค้ด[/bold red]")
+
+    console.print("[bold green]1) 🤖 สมัคร LINE อัตโนมัติ[/bold green]")
+    console.print("[bold blue]2) 🗑️ ลบรายชื่อผู้ติดต่อทั้งหมด[/bold blue]")
+    console.print("[bold white]3) 👥 ลบเพื่อนใน LINE ทั้งหมด[/bold white]")
+    console.print("[bold cyan]4) ⚙️ ตั้งค่ารูปโปรไฟล์[/bold cyan]")
+    console.print("[bold yellow]5) ➕ เช๊คไอดีไลน์[/bold yellow]")
+    console.print("[bold red]6) 🔄 รีสตาร์ทโปรแกรม[/bold red]")
     console.print("[bold magenta]7) 🧹 ปัดล้างทั้งหมด[/bold magenta]")
-    console.print("[bold bright_cyan]8) 🔙 เปิด LINE ใหม่ [/bold bright_cyan]")
+    console.print("[bold bright_cyan]8) 🔙 เปิด LINE ใหม่[/bold bright_cyan]")
+
+    # IMPORTANT: ต้องเยื้อง
+    if is_main_machine():
+        console.print("[bold green]9) ⬇️ Update now (Main machine only)[/bold green]")
+
     console.print("[bold cyan]" + "="*60 + "[/bold cyan]")
-    console.print("[yellow]⚡ รันทุก LD พร้อมกัน | 📊 มีสถานะ Real-time[/yellow]")
-    console.print("[bold cyan]" + "="*60 + "[/bold cyan]")
+    console.print("")  # ✅ บังคับขึ้นบรรทัดใหม่กันลอย
+    print()   # ← สำคัญ
+
+def ask_mode():
+    while True:
+        console.print("")  # ✅ ดัน cursor ลงบรรทัดใหม่ชัวร์
+
+        mode = console.input("👉 เลือกโหมด (1-8) หรือพิมพ์ Q เพื่อออก: ").strip().lower()
+
+        if mode == "q":
+            return "q"
+        if mode in ["1","2","3","4","5","6","7","8","9"]:
+            return mode
+
+        console.print("[bold red]❌ เลือกโหมดไม่ถูกต้อง[/bold red]")
+        console.input("กด Enter เพื่อกลับไปเมนู...")
+
+
 
 
 # ---------- MAIN ----------
@@ -1200,20 +1325,23 @@ def main():
         clear_screen()
         show_menu()
 
-        mode = input("👉 เลือกโหมด (1/2/3/4/5/6/7/8) หรือพิมพ์ Q เพื่อออก: ").strip().lower()
-
+        mode = ask_mode()
+        
+        if mode is None:    
+            continue
         if mode == "q":
             print("👋 ออกจากโปรแกรมแล้ว")
             break
+
         if mode == "6":
             fancy_restart()
-            
-            
-        if mode not in ["1", "2", "3", "4", "5", "6", "7", "8"]:
-            print("❌ เลือกโหมดไม่ถูกต้อง")
-            input("กด Enter เพื่อกลับไปเมนู...")
             continue
 
+        if mode == "9":
+            update_and_restart()
+            continue
+
+        # ---- ต่อจากนี้ค่อยทำงานตามเดิม ----
         devices = get_devices()
         if not devices:
             print("❌ ไม่เจอ LD Player")
@@ -1227,19 +1355,15 @@ def main():
             set_status(s, "รอ", "เตรียมทำงาน")
 
         stop_event = threading.Event()
-        ui_thread = threading.Thread(target=status_ui_loop, args=(stop_event,), daemon=True)
+        ui_thread = threading.Thread(target=status_ui_loop, args=(stop_event,))  # ✅ ไม่ใช้ daemon
         ui_thread.start()
 
-        # ตัวดักปุ่ม Q
         listener_thread = threading.Thread(target=cancel_listener, daemon=True)
         listener_thread.start()
 
         max_workers = len(devices)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            for serial in devices:
-                futures.append(executor.submit(run_on_device, serial, mode))
-
+            futures = [executor.submit(run_on_device, serial, mode) for serial in devices]
             for future in as_completed(futures):
                 try:
                     future.result()
@@ -1247,7 +1371,9 @@ def main():
                     print(f"Thread error: {e}")
 
         stop_event.set()
-        time.sleep(1)
+        ui_thread.join(timeout=3)  # ✅ รอให้ Live ปิดสนิทก่อน
+
+        console.print("")  # ✅ ดัน cursor ลงบรรทัดใหม่กันลอย
                 # ===== สรุปผล =====
         if CANCEL_EVENT.is_set():
             console.print("\n[bold red]🛑 งานถูกยกเลิกโดยผู้ใช้[/bold red]")

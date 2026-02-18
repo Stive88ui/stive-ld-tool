@@ -1,3 +1,5 @@
 pip install --upgrade pip
 pip install uiautomator2
 pip install requests
+
+git clone https://github.com/Stive88ui/stive-ld-tool.git
