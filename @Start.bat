@@ -1,4 +1,4 @@
 @echo off
-title  by Stive88
-python Main.py
+cd /d %~dp0
+python runner.py
 pause
